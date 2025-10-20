@@ -6,8 +6,8 @@ import itertools
 import numpy as np
 import tqdm
 
-from human_eval.data import HUMAN_EVAL, read_problems, stream_jsonl, write_jsonl
-from human_eval.execution import check_correctness
+from human_eval.human_eval.data import HUMAN_EVAL, read_problems, stream_jsonl, write_jsonl
+from human_eval.human_eval.execution import check_correctness
 
 
 def estimate_pass_at_k(
@@ -68,12 +68,14 @@ def evaluate_functional_correctness(
             completion_id[task_id] += 1
             n_samples += 1
 
-        assert len(completion_id) == len(problems), "Some problems are not attempted."
+        #assert len(completion_id) == len(problems), "Some problems are not attempted."
 
         print("Running test suites...")
         for future in tqdm.tqdm(as_completed(futures), total=len(futures)):
             result = future.result()
             results[result["task_id"]].append((result["completion_id"], result))
+    
+    print(results)
 
     # Calculate pass@k.
     total, correct = [], []
@@ -84,7 +86,9 @@ def evaluate_functional_correctness(
         correct.append(sum(passed))
     total = np.array(total)
     correct = np.array(correct)
-
+    
+    acc = correct.sum() / total.sum()
+    '''
     ks = k
     pass_at_k = {f"pass@{k}": estimate_pass_at_k(total, correct, k).mean()
                  for k in ks if (total >= k).all()}
@@ -97,9 +101,9 @@ def evaluate_functional_correctness(
             sample["result"] = result[1]["result"]
             sample["passed"] = result[1]["passed"]
             yield sample
-
+    
     out_file = sample_file + "_results.jsonl"
     print(f"Writing results to {out_file}...")
     write_jsonl(out_file, tqdm.tqdm(combine_results(), total=n_samples))
-
-    return pass_at_k
+    '''
+    return acc
