@@ -33,52 +33,73 @@ def unsafe_execute(problem: Dict, completion: str, timeout: float, result):
             + f"check({problem['entry_point']})"
         )
 
-        try:
-            exec_globals = {}
-            with swallow_io():
-                with time_limit(timeout):
-                    # WARNING
-                    # This program exists to execute untrusted model-generated code. Although
-                    # it is highly unlikely that model-generated code will do something overtly
-                    # malicious in response to this test suite, model-generated code may act
-                    # destructively due to a lack of model capability or alignment.
-                    # Users are strongly encouraged to sandbox this evaluation suite so that it
-                    # does not perform destructive actions on their host or network. For more
-                    # information on how OpenAI sandboxes its code, see the accompanying paper.
-                    # Once you have read this disclaimer and taken appropriate precautions,
-                    # uncomment the following line and proceed at your own risk:
-                    exec(check_program, exec_globals)
-            result.append("passed")
-        except TimeoutException:
-            result.append("timed out")
-        except BaseException as e:
-            result.append(f"failed: {e}")
+        while True:
+            try:
+                exec_globals = {}
+                with swallow_io():
+                    with time_limit(timeout):
+                        # WARNING
+                        # This program exists to execute untrusted model-generated code. Although
+                        # it is highly unlikely that model-generated code will do something overtly
+                        # malicious in response to this test suite, model-generated code may act
+                        # destructively due to a lack of model capability or alignment.
+                        # Users are strongly encouraged to sandbox this evaluation suite so that it
+                        # does not perform destructive actions on their host or network. For more
+                        # information on how OpenAI sandboxes its code, see the accompanying paper.
+                        # Once you have read this disclaimer and taken appropriate precautions,
+                        # uncomment the following line and proceed at your own risk:
+                        exec(check_program, exec_globals)
+                result.append("passed")
+            except TimeoutException:
+                print("Timed out! Retrying...")
+                continue
+            except BaseException as e:
+                result.append(f"failed: {e}")
+                break
 
-        # Needed for cleaning up.
-        shutil.rmtree = rmtree
-        os.rmdir = rmdir
-        os.chdir = chdir
+            # Needed for cleaning up.
+            shutil.rmtree = rmtree
+            os.rmdir = rmdir
+            os.chdir = chdir
 
 
 def check_correctness(
-    problem: Dict, completion: str, timeout: float, completion_id: Optional[int] = None
+    problem: Dict, completion: str, timeout: float, completion_id: Optional[int] = None,
+    max_retries: int = 10
 ) -> Dict:
     """
-    Evaluates the functional correctness of a completion by running the test
-    suite provided in the problem.
-
-    :param completion_id: an optional completion ID so we can match
-        the results later even if execution finishes asynchronously.
+    Repeatedly runs the sandbox until it returns passed/failed instead of timed out.
     """
+    retries = 0
+    while retries < max_retries:
 
-    manager = multiprocessing.Manager()
-    result = manager.list()
+        manager = multiprocessing.Manager()
+        result = manager.list()
 
-    p = multiprocessing.Process(target=unsafe_execute, args=(problem, completion, timeout, result))
-    p.start()
-    p.join(timeout=timeout + 1)
-    if p.is_alive():
-        p.kill()
+        p = multiprocessing.Process(
+            target=unsafe_execute,
+            args=(problem, completion, timeout, result),
+        )
+
+        p.start()
+        p.join(timeout=timeout + 1)
+
+        if p.is_alive():
+            p.kill()
+
+        # If we got a real answer, return it
+        if result and result[0] != "timed out":
+            return dict(
+                task_id=problem["task_id"],
+                passed=result[0] == "passed",
+                result=result[0],
+                completion_id=completion_id,
+            )
+
+        retries += 1
+        timeout += 10  # Increase timeout for next try
+        # Otherwise retry
+        print(f"Timeout retrying...")
 
     if not result:
         result.append("timed out")
@@ -89,7 +110,6 @@ def check_correctness(
         result=result[0],
         completion_id=completion_id,
     )
-
 
 @contextlib.contextmanager
 def time_limit(seconds: float):
